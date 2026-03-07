@@ -24,6 +24,14 @@ android {
     compileSdk = 35
     buildToolsVersion = "35.0.0"
 
+splits {
+    abi {
+        isEnable = true
+        include("armeabi-v7a")
+        isUniversalApk = true
+    }
+}
+
     defaultConfig {
         applicationId = "com.osfans.trime"
         minSdk = 21
