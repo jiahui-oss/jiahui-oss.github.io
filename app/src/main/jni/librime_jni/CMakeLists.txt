@@ -12,3 +12,4 @@ target_include_directories(rime_jni PRIVATE
   "${CMAKE_SOURCE_DIR}/librime/src"
   "${Opencc_INCLUDE_PATH}"
 )
+target_link_options(rime_jni PRIVATE -Wl,--hash-style=both)
