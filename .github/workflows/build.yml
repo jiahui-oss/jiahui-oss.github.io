@@ -19,9 +19,9 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Upgrade pip & install buildozer
+      - name: Lock tool versions
         run: |
-          python -m pip install --upgrade pip==24.0 setuptools==69.0 wheel==0.42.0
+          python -m pip install --upgrade pip==23.3.2 setuptools==69.0.0 wheel==0.42.0
           pip install buildozer==1.5.0 cython==0.29.36
 
       - name: Install system dependencies
@@ -37,9 +37,9 @@ jobs:
           path: |
             ~/.buildozer
             ~/.android
-          key: buildozer-v2-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-v3-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-v2-
+            buildozer-v3-
 
       - name: Prepare Android env
         run: |
