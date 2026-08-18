@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,14 +27,28 @@ jobs:
             automake libltdl-dev
 
       - name: Install buildozer
-        run: |
-          pip install buildozer cython
+        run: pip install buildozer cython
 
-      - name: Build APK
+      - name: Cache buildozer & android
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            ~/.android
+          key: buildozer-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-
+
+      - name: Prepare Android env
         run: |
           mkdir -p ~/.android
           touch ~/.android/repositories.cfg
-          yes | script -q -c "buildozer -v android debug" /dev/null
+
+      - name: Build APK
+        run: yes | buildozer -v android debug
+        timeout-minutes: 60
+        env:
+          BUILDOZER_WARN_ON_ROOT: 0
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
