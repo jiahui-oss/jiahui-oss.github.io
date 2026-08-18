@@ -444,6 +444,10 @@ warn_on_root = 1
 # (str) Path to build output (i.e. .apk, .aab, .ipa) storage
 # bin_dir = ./bin
 
+# ... 原来有的配置保留 ...
+
+p4a.version = latest
+
 #-----------------------------------------------------------------------------
 #   Notes about using this file:
 #
