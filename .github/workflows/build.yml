@@ -30,7 +30,10 @@ jobs:
           pip install buildozer cython
 
       - name: Build APK
-        run: buildozer -v android debug
+        run: |
+          mkdir -p ~/.android
+          touch ~/.android/repositories.cfg
+          yes | script -q -c "buildozer -v android debug" /dev/null
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
