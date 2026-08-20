@@ -14,19 +14,16 @@ jobs:
         with:
           ref: xuanjie-app
 
-      # ---------- 固定 Python 版本 ----------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # ---------- 锁定 Python 打包工具 ----------
       - name: Lock Python packaging tools & buildozer
         run: |
           python -m pip install --no-cache-dir --upgrade pip==23.3.2 setuptools==69.0.0 wheel==0.42.0
           pip install --no-cache-dir buildozer==1.5.0 cython==0.29.36
 
-      # ---------- 安装系统依赖（不锁定版本，使用最新可用版） ----------
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -34,20 +31,20 @@ jobs:
             zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev \
             automake libltdl-dev
 
-      # ---------- 检查关键工具版本（便于调试） ----------
       - name: Check installed versions
         run: |
           git --version
           java -version
           cmake --version
           python --version
+          pip --version
           pip list | grep -E "buildozer|cython"
 
-      # ---------- 强制写入最佳配置到 buildozer.spec ----------
+      # ---------- 强制设置 buildozer.spec 中的关键配置 ----------
       - name: Lock Android NDK, SDK API and p4a branch in buildozer.spec
         run: |
-          # 关键配置项（如果已有则替换，否则追加）
-          for key in "android.ndk = 25b" "android.api = 33" "p4a.branch = develop" "android.build_tools_version = 33.0.0" "android.accept_sdk_license = True" "android.sdk_path = $HOME/.buildozer/android/platform/android-sdk"; do
+          # 注意：这里将 p4a.branch 改为 master（稳定分支）
+          for key in "android.ndk = 25b" "android.api = 33" "p4a.branch = master" "android.build_tools_version = 33.0.0" "android.accept_sdk_license = True" "android.sdk_path = $HOME/.buildozer/android/platform/android-sdk"; do
             if grep -q "^${key%%=*}" buildozer.spec; then
               sed -i "s|^${key%%=*}.*|${key}|" buildozer.spec
             else
@@ -55,7 +52,6 @@ jobs:
             fi
           done
 
-      # ---------- 设置环境变量 ----------
       - name: Set environment variables
         run: |
           echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
@@ -63,8 +59,9 @@ jobs:
           echo "GRADLE_USER_HOME=$HOME/.gradle" >> $GITHUB_ENV
           echo "PYTHONUNBUFFERED=1" >> $GITHUB_ENV
           echo "BUILDOZER_WARN_ON_ROOT=0" >> $GITHUB_ENV
+          # 额外保险：禁止 pip 自动升级
+          echo "PIP_DISABLE_PIP_VERSION_CHECK=1" >> $GITHUB_ENV
 
-      # ---------- 缓存（更新为 v6，强制重建） ----------
       - name: Cache buildozer & android & gradle
         uses: actions/cache@v4
         with:
@@ -72,23 +69,21 @@ jobs:
             ~/.buildozer
             ~/.android
             ~/.gradle
-          key: buildozer-v6-${{ hashFiles('buildozer.spec', 'requirements.txt') }}
+          key: buildozer-v7-${{ hashFiles('buildozer.spec', 'requirements.txt') }}
           restore-keys: |
-            buildozer-v6-
+            buildozer-v7-
 
       - name: Prepare Android env
         run: |
           mkdir -p ~/.android
           touch ~/.android/repositories.cfg
 
-      # ---------- 构建 APK ----------
       - name: Build APK
         run: yes | buildozer -v android debug
         timeout-minutes: 60
         env:
           PYTHONFORANDROID_PREREQUISITES_INSTALL_INTERACTIVE: 0
 
-      # ---------- 上传 APK ----------
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
@@ -96,7 +91,6 @@ jobs:
           name: xuanjie-apk
           path: bin/*.apk
 
-      # ---------- 失败时上传整个 .buildozer 目录（包含详细日志） ----------
       - name: Upload full buildozer log on failure
         if: failure()
         uses: actions/upload-artifact@v4
