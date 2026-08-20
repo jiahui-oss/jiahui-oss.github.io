@@ -17,19 +17,32 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.10'   # 3.10 稳定可用，若升级至 3.11 需注意 distutils 问题
 
-      - name: Lock tool versions
+      - name: Lock Python packaging tools & buildozer
         run: |
           python -m pip install --upgrade pip==23.3.2 setuptools==69.0.0 wheel==0.42.0
-          pip install buildozer==1.5.0 cython==0.29.36
+          pip install buildozer==1.5.0 cython==0.29.36   # Cython 必须 <3.0
 
-      - name: Install system dependencies
+      - name: Install system dependencies (fixed versions by Ubuntu repo)
         run: |
           sudo apt-get update
           sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev \
             automake libltdl-dev
+
+      - name: Lock Android NDK, SDK API and p4a branch in buildozer.spec
+        run: |
+          # 若 buildozer.spec 中已存在相应行则替换，否则追加至末尾
+          for key in "android.ndk = 25b" "android.api = 33" "p4a.branch = develop"; do
+            if grep -q "^${key%%=*}" buildozer.spec; then
+              sed -i "s/^${key%%=*}.*/${key}/" buildozer.spec
+            else
+              echo "$key" >> buildozer.spec
+            fi
+          done
+          # 可选：强制 build_tools_version（通常自动选择，但可指定）
+          # sed -i 's/^#\?android.build_tools_version = .*/android.build_tools_version = 33.0.0/' buildozer.spec
 
       - name: Cache buildozer & android
         uses: actions/cache@v4
