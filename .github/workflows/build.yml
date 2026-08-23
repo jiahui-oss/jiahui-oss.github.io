@@ -9,91 +9,244 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
+
+    env:
+      PYTHON_VERSION: "3.10"
+      BUILDOZER_VERSION: "1.5.0"
+      CYTHON_VERSION: "0.29.36"
+
+      # Android toolchain
+      ANDROID_API: "33"
+      ANDROID_NDK: "25b"
+      ANDROID_BUILD_TOOLS: "33.0.0"
+
+      # 不让 pip 自己输出版本检查
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONUNBUFFERED: "1"
+
+      # Buildozer
+      BUILDOZER_WARN_ON_ROOT: "0"
+
+      # Android
+      ANDROID_HOME: "/home/runner/.buildozer/android/platform/android-sdk"
+      JAVA_HOME: "/usr/lib/jvm/java-17-openjdk-amd64"
+      GRADLE_USER_HOME: "/home/runner/.gradle"
+
     steps:
-      - uses: actions/checkout@v4
+
+      # ============================================================
+      # 1. Checkout
+      # ============================================================
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           ref: xuanjie-app
 
+      # ============================================================
+      # 2. Python
+      # ============================================================
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
 
-      - name: Lock Python packaging tools & buildozer
-        run: |
-          python -m pip install --no-cache-dir --upgrade pip==23.3.2 setuptools==69.0.0 wheel==0.42.0
-          pip install --no-cache-dir buildozer==1.5.0 cython==0.29.36
-
+      # ============================================================
+      # 3. System dependencies
+      # ============================================================
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev \
-            automake libltdl-dev
 
-      - name: Check installed versions
+          sudo apt-get install -y \
+            git \
+            zip \
+            unzip \
+            openjdk-17-jdk \
+            autoconf \
+            automake \
+            libtool \
+            libltdl-dev \
+            pkg-config \
+            zlib1g-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            cmake \
+            libffi-dev \
+            libssl-dev
+
+      # ============================================================
+      # 4. Host Python packaging environment
+      # ============================================================
+      - name: Install pinned Python build tools
         run: |
+          python -m pip install --no-cache-dir \
+            pip==23.3.2 \
+            setuptools==69.0.0 \
+            wheel==0.42.0
+
+          python -m pip install --no-cache-dir \
+            buildozer==${{ env.BUILDOZER_VERSION }} \
+            cython==${{ env.CYTHON_VERSION }}
+
+      # ============================================================
+      # 5. Print versions
+      # ============================================================
+      - name: Check toolchain
+        run: |
+          echo "========== SYSTEM =========="
           git --version
           java -version
           cmake --version
+
+          echo
+          echo "========== PYTHON =========="
           python --version
-          pip --version
-          pip list | grep -E "buildozer|cython"
+          python -m pip --version
 
-      # ---------- 强制设置 buildozer.spec 中的关键配置 ----------
-      - name: Lock Android NDK, SDK API and p4a branch in buildozer.spec
+          echo
+          echo "========== PYTHON PACKAGES =========="
+          python -m pip list | grep -E \
+            "buildozer|Cython|pip|setuptools|wheel" || true
+
+          echo
+          echo "========== ENV =========="
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "GRADLE_USER_HOME=$GRADLE_USER_HOME"
+
+      # ============================================================
+      # 6. 强制设置 buildozer.spec
+      #
+      # 注意：
+      # p4a.branch 不能真正冻结版本。
+      # p4a.commit 才是关键。
+      #
+      # 这里暂时只固定 branch。
+      # 第一次成功构建后，把日志中的 p4a commit 填进去。
+      # ============================================================
+      - name: Configure buildozer.spec
         run: |
-          # 注意：这里将 p4a.branch 改为 master（稳定分支）
-          for key in "android.ndk = 25b" "android.api = 33" "p4a.branch = master" "android.build_tools_version = 33.0.0" "android.accept_sdk_license = True" "android.sdk_path = $HOME/.buildozer/android/platform/android-sdk"; do
-            if grep -q "^${key%%=*}" buildozer.spec; then
-              sed -i "s|^${key%%=*}.*|${key}|" buildozer.spec
-            else
-              echo "$key" >> buildozer.spec
-            fi
-          done
+          python - <<'PY'
+          from pathlib import Path
 
-      - name: Set environment variables
+          path = Path("buildozer.spec")
+          text = path.read_text()
+
+          settings = {
+              "android.api": "33",
+              "android.ndk": "25b",
+              "android.build_tools_version": "33.0.0",
+              "android.accept_sdk_license": "True",
+              "p4a.fork": "kivy",
+              "p4a.branch": "master",
+          }
+
+          lines = text.splitlines()
+
+          for key, value in settings.items():
+              found = False
+
+              for i, line in enumerate(lines):
+                  stripped = line.lstrip()
+
+                  if stripped.startswith("#"):
+                      stripped = stripped[1:].lstrip()
+
+                  if stripped.startswith(key + " ="):
+                      prefix = line[:len(line) - len(line.lstrip())]
+                      lines[i] = f"{prefix}{key} = {value}"
+                      found = True
+                      break
+
+              if not found:
+                  lines.append(f"{key} = {value}")
+
+          path.write_text("\n".join(lines) + "\n")
+          PY
+
+          echo "========== BUILDOSER SPEC =========="
+          grep -E \
+            "android.api|android.ndk|android.build_tools_version|android.accept_sdk_license|p4a.fork|p4a.branch|p4a.commit" \
+            buildozer.spec || true
+
+      # ============================================================
+      # 7. 准备 Android 环境
+      # ============================================================
+      - name: Prepare Android environment
         run: |
-          echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
-          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
-          echo "GRADLE_USER_HOME=$HOME/.gradle" >> $GITHUB_ENV
-          echo "PYTHONUNBUFFERED=1" >> $GITHUB_ENV
-          echo "BUILDOZER_WARN_ON_ROOT=0" >> $GITHUB_ENV
-          # 额外保险：禁止 pip 自动升级
-          echo "PIP_DISABLE_PIP_VERSION_CHECK=1" >> $GITHUB_ENV
+          mkdir -p "$HOME/.android"
+          touch "$HOME/.android/repositories.cfg"
 
-      - name: Cache buildozer & android & gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.buildozer
-            ~/.android
-            ~/.gradle
-          key: buildozer-v7-${{ hashFiles('buildozer.spec', 'requirements.txt') }}
-          restore-keys: |
-            buildozer-v7-
-
-      - name: Prepare Android env
+      # ============================================================
+      # 8. 第一次调试：
+      #
+      # 不使用旧 ~/.buildozer cache。
+      #
+      # 这一点非常重要。
+      # ============================================================
+      - name: Clean old Buildozer state
         run: |
-          mkdir -p ~/.android
-          touch ~/.android/repositories.cfg
+          rm -rf "$HOME/.buildozer"
 
+          mkdir -p "$HOME/.buildozer"
+
+      # ============================================================
+      # 9. Build
+      # ============================================================
       - name: Build APK
-        run: yes | buildozer -v android debug
+        run: |
+          yes | buildozer -v android debug
         timeout-minutes: 60
         env:
-          PYTHONFORANDROID_PREREQUISITES_INSTALL_INTERACTIVE: 0
+          PYTHONFORANDROID_PREREQUISITES_INSTALL_INTERACTIVE: "0"
 
+      # ============================================================
+      # 10. Upload APK
+      # ============================================================
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: xuanjie-apk
           path: bin/*.apk
+          if-no-files-found: error
 
-      - name: Upload full buildozer log on failure
+      # ============================================================
+      # 11. Failure diagnostics
+      # ============================================================
+      - name: Show p4a information on failure
+        if: failure()
+        run: |
+          echo "========== p4a git information =========="
+
+          if [ -d "$HOME/.buildozer/android/platform/python-for-android/.git" ]; then
+            cd "$HOME/.buildozer/android/platform/python-for-android"
+
+            git remote -v
+            git branch -vv
+            git rev-parse HEAD
+            git log -1 --oneline
+          else
+            echo "p4a directory not found"
+          fi
+
+          echo
+          echo "========== Build directories =========="
+
+          find "$HOME/.buildozer/android/platform" \
+            -maxdepth 4 \
+            -type d 2>/dev/null | head -200 || true
+
+      # ============================================================
+      # 12. Upload complete build directory
+      # ============================================================
+      - name: Upload full Buildozer log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: buildozer-full-log
-          path: .buildozer/
+          name: xuanjie-buildozer-debug
+          path: |
+            .buildozer/
+            ${{ env.HOME }}/.buildozer/
+          if-no-files-found: warn
