@@ -107,8 +107,68 @@ jobs:
           mkdir -p "$HOME/.buildozer"
 
           echo "Clean complete."
+          - name: Prepare Android SDK and python-for-android
+          run: |
+          echo "============================================================"
+          echo "PREPARING ANDROID SDK"
+          echo "============================================================"
 
+          export BUILDOZER_ANDROID_DIR="$HOME/.buildozer/android/platform"
 
+          mkdir -p "$BUILDOZER_ANDROID_DIR"
+
+          # 自动接受 Android SDK licenses
+          mkdir -p "$HOME/.android"
+
+          cat > "$HOME/.android/repositories.cfg" <<'EOF'
+          EOF
+
+          # 接受 Buildozer / p4a 所需要的 SDK licenses
+          yes | buildozer android p4a -- --help || true
+
+          echo ""
+          echo "============================================================"
+          echo "ANDROID SDK CHECK"
+          echo "============================================================"
+
+          SDK="$HOME/.buildozer/android/platform/android-sdk"
+
+          if [ -d "$SDK" ]; then
+            echo "Buildozer SDK:"
+            echo "$SDK"
+
+            find "$SDK" \
+              -maxdepth 2 \
+              -type d \
+              -name "build-tools" \
+              -o -name "platforms" \
+              -print 2>/dev/null || true
+          else
+            echo "Buildozer SDK directory does not exist yet."
+          fi
+
+          echo ""
+          echo "============================================================"
+          echo "PREPARING PYTHON-FOR-ANDROID"
+          echo "============================================================"
+
+          P4A_DIR=".buildozer/android/platform/python-for-android"
+
+          if [ ! -d "$P4A_DIR" ]; then
+            echo "ERROR: python-for-android was not downloaded."
+            exit 1
+          fi
+
+          RECIPE="$P4A_DIR/pythonforandroid/recipes/libthorvg/__init__.py"
+
+          if [ ! -f "$RECIPE" ]; then
+            echo "ERROR: libthorvg recipe not found."
+            exit 1
+          fi
+
+          echo "Found recipe:"
+          echo "$RECIPE"
+          
       # ============================================================
       # 7. Download / initialize python-for-android
       #
@@ -119,38 +179,6 @@ jobs:
       #
       # 然后我们才能修 libthorvg recipe。
       # ============================================================
-      - name: Prepare python-for-android
-        run: |
-          echo "============================================================"
-          echo "PREPARING PYTHON-FOR-ANDROID"
-          echo "============================================================"
-
-          buildozer android p4a -- --help
-
-          P4A_DIR=".buildozer/android/platform/python-for-android"
-          RECIPE="$P4A_DIR/pythonforandroid/recipes/libthorvg/__init__.py"
-
-          echo ""
-          echo "P4A directory:"
-          echo "$P4A_DIR"
-
-          echo ""
-          echo "Checking libthorvg recipe..."
-
-          if [ ! -f "$RECIPE" ]; then
-            echo "ERROR: libthorvg recipe was not found."
-            echo "Expected:"
-            echo "$RECIPE"
-            exit 1
-          fi
-
-          echo "Found:"
-          echo "$RECIPE"
-
-          echo ""
-          echo "Original recipe section:"
-          grep -n -A8 -B5 "clang_lib_dir" "$RECIPE" || true
-
 
       # ============================================================
       # 8. Patch libthorvg
