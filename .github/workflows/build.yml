@@ -6,172 +6,127 @@ on:
       - xuanjie-app
   workflow_dispatch:
 
+env:
+  PYTHONFORANDROID_PREREQUISITES_INSTALL_INTERACTIVE: "0"
+
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 90
 
     steps:
 
       # ============================================================
-      # 1. Checkout
+      # 官方 Buildozer CI：Checkout
       # ============================================================
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: xuanjie-app
 
-
       # ============================================================
-      # 2. Python 3.10
+      # 官方 Buildozer CI：Python
       # ============================================================
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.10"
-
+          python-version: "3.x"
 
       # ============================================================
-      # 3. Java 17
+      # 官方 Buildozer CI：Java 17
       # ============================================================
-      - name: Set up Java
+      - name: Setup Java
         uses: actions/setup-java@v6
         with:
-          distribution: temurin
           java-version: "17"
-
+          distribution: "temurin"
 
       # ============================================================
-      # 4. Install system dependencies
+      # Linux dependencies
+      # 官方 CI 明确安装的依赖
       # ============================================================
-      - name: Install dependencies
+      - name: Install Linux dependencies
         run: |
-          sudo apt-get update
-
-          sudo apt-get install -y \
-            build-essential \
-            git \
-            zip \
-            unzip \
-            openjdk-17-jdk \
-            python3-dev \
-            autoconf \
+          sudo apt update
+          sudo apt -y install \
             automake \
-            libtool \
-            pkg-config \
-            zlib1g-dev \
-            libncurses5-dev \
-            libncursesw5-dev \
-            libffi-dev \
-            libssl-dev \
-            libltdl-dev \
-            cmake \
-            gettext \
-            autopoint
-
-          sudo apt-get clean
-
+            libltdl-dev
 
       # ============================================================
-      # 5. Python build tools
+      # 安装 Buildozer
       # ============================================================
       - name: Install Buildozer
         run: |
-          python -m pip install \
-            pip==23.3.2 \
-            setuptools==69.0.0 \
-            wheel==0.42.0
+          python -m pip install --upgrade pip
+          python -m pip install buildozer
 
-          python -m pip install \
-            buildozer==1.5.0 \
-            cython==0.29.36
-
+          echo "========================================"
           echo "Python:"
           python --version
 
+          echo "========================================"
+          echo "pip:"
+          python -m pip --version
+
+          echo "========================================"
           echo "Buildozer:"
           buildozer --version
 
+      # ============================================================
+      # 使用官方方式准备 SDK / NDK / p4a
+      # ============================================================
+      - name: Setup Android build environment
+        run: |
+          sed -i.bak \
+            "s/# android.accept_sdk_license = False/android.accept_sdk_license = True/" \
+            buildozer.spec
+
+          sed -i.bak \
+            "s/#p4a.branch = master/p4a.branch = develop/" \
+            buildozer.spec
+
+          echo "========================================"
+          echo "Buildozer configuration:"
+          echo "========================================"
+
+          grep -E \
+            "^(title|package.name|package.domain|requirements|android.api|android.minapi|android.sdk|android.ndk|android.archs|android.accept_sdk_license|p4a.branch)" \
+            buildozer.spec || true
+
+          echo "========================================"
+          echo "Preparing python-for-android..."
+          echo "========================================"
+
+          buildozer android p4a -- --help
 
       # ============================================================
-      # 6. Clean old build state
+      # 清理旧构建状态
       # ============================================================
       - name: Clean build state
         run: |
+          rm -rf .buildozer
           rm -rf "$HOME/.buildozer"
-          rm -rf ".buildozer"
-
-          mkdir -p "$HOME/.buildozer"
-          mkdir -p "$HOME/.android"
-
-          touch "$HOME/.android/repositories.cfg"
-
 
       # ============================================================
-      # 7. Check buildozer.spec
-      # ============================================================
-      - name: Check build configuration
-        run: |
-          echo "============================================================"
-          echo "BUILDOZER CONFIGURATION"
-          echo "============================================================"
-
-          grep -E \
-            "^(title|package.name|requirements|android.api|android.minapi|android.sdk|android.ndk|android.archs|android.accept_sdk_license|p4a.version)" \
-            buildozer.spec || true
-
-          echo ""
-          echo "Checking that p4a.version=latest is absent..."
-
-          if grep -q "^p4a.version[[:space:]]*=" buildozer.spec; then
-            echo "ERROR: p4a.version is still present."
-            exit 1
-          fi
-
-          echo "OK."
-
-
-      # ============================================================
-      # 8. Build APK
-      #
-      # SDK / NDK / p4a / licenses are handled by Buildozer.
-      # 不再手动碰 .buildozer。
+      # 正式构建 APK
       # ============================================================
       - name: Build APK
         run: |
-          echo "============================================================"
+          echo "========================================"
           echo "BUILDING XUANJIE APK"
-          echo "============================================================"
+          echo "========================================"
 
-          echo ""
-          echo "Python:"
-          python --version
-
-          echo ""
-          echo "Buildozer:"
-          buildozer --version
-
-          echo ""
-          echo "Starting Android build..."
-          echo ""
-
-          yes | buildozer -v android debug
-
-        timeout-minutes: 70
-
-        env:
-          PYTHONFORANDROID_PREREQUISITES_INSTALL_INTERACTIVE: "0"
-
+          buildozer android debug
 
       # ============================================================
-      # 9. Show APK
+      # 显示 APK
       # ============================================================
       - name: Show APK
         if: success()
         run: |
-          echo "============================================================"
+          echo "========================================"
           echo "APK OUTPUT"
-          echo "============================================================"
+          echo "========================================"
 
           find bin \
             -maxdepth 1 \
@@ -180,9 +135,8 @@ jobs:
             -print \
             -exec ls -lh {} \;
 
-
       # ============================================================
-      # 10. Upload APK
+      # 上传 APK
       # ============================================================
       - name: Upload APK
         if: success()
