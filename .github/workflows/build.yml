@@ -249,13 +249,28 @@ jobs:
           echo "BUILDING APK"
           echo "============================================================"
 
-          yes | buildozer -v android debug
+          yes | buildozer -v android debug || BUILD_FAILED=1
+
+          echo "============================================================"
+          echo "INSPECTING libthorvg"
+          echo "============================================================"
+
+          RECIPE=$(find .buildozer -path "*/pythonforandroid/recipes/libthorvg/__init__.py" -print -quit 2>/dev/null || true)
+
+          if [ -n "$RECIPE" ]; then
+            echo "Recipe: $RECIPE"
+            sed -n '70,115p' "$RECIPE"
+          fi
+
+          find .buildozer -path "*/pythonforandroid/recipes/libthorvg/*" -print 2>/dev/null || true
+
+          exit "${BUILD_FAILED:-0}"
 
         timeout-minutes: 60
 
         env:
           PYTHONFORANDROID_PREREQUISITES_INSTALL_INTERACTIVE: "0"
-
+          
       # ============================================================
       # 10. Upload APK
       # ============================================================
