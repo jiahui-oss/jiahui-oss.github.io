@@ -11,16 +11,12 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
 
-    env:
-      BUILDOZER_WARN_ON_ROOT: "0"
-      PYTHONFORANDROID_PREREQUISITES_INSTALL_INTERACTIVE: "0"
-
     steps:
 
       # ============================================================
       # 1. Checkout
       # ============================================================
-      - name: Checkout source
+      - name: Checkout
         uses: actions/checkout@v5
         with:
           ref: xuanjie-app
@@ -46,9 +42,9 @@ jobs:
 
 
       # ============================================================
-      # 4. System dependencies
+      # 4. Install system dependencies
       # ============================================================
-      - name: Install system dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
 
@@ -79,7 +75,7 @@ jobs:
       # ============================================================
       # 5. Python build tools
       # ============================================================
-      - name: Install Python build tools
+      - name: Install Buildozer
         run: |
           python -m pip install \
             pip==23.3.2 \
@@ -90,24 +86,18 @@ jobs:
             buildozer==1.5.0 \
             cython==0.29.36
 
-          echo ""
-          echo "Buildozer:"
-          buildozer --version
-
-          echo ""
           echo "Python:"
           python --version
 
+          echo "Buildozer:"
+          buildozer --version
+
 
       # ============================================================
-      # 6. Clean Buildozer state
+      # 6. Clean old build state
       # ============================================================
-      - name: Clean Buildozer state
+      - name: Clean build state
         run: |
-          echo "============================================================"
-          echo "CLEANING BUILDOZER STATE"
-          echo "============================================================"
-
           rm -rf "$HOME/.buildozer"
           rm -rf ".buildozer"
 
@@ -116,286 +106,41 @@ jobs:
 
           touch "$HOME/.android/repositories.cfg"
 
-          echo "Clean complete."
-
 
       # ============================================================
-      # 7. Initialize Buildozer Android environment
-      #
-      # 这里让 Buildozer / p4a 先建立自己的 Android SDK。
+      # 7. Check buildozer.spec
       # ============================================================
-      - name: Initialize Android environment
+      - name: Check build configuration
         run: |
           echo "============================================================"
-          echo "INITIALIZING ANDROID ENVIRONMENT"
+          echo "BUILDOZER CONFIGURATION"
           echo "============================================================"
 
-          mkdir -p "$HOME/.buildozer/android/platform"
-
-          yes | buildozer android p4a -- --help || true
+          grep -E \
+            "^(title|package.name|requirements|android.api|android.minapi|android.sdk|android.ndk|android.archs|android.accept_sdk_license|p4a.version)" \
+            buildozer.spec || true
 
           echo ""
-          echo "Buildozer Android directory:"
-          find "$HOME/.buildozer/android/platform" \
-            -maxdepth 2 \
-            -type d \
-            -print 2>/dev/null | head -100
+          echo "Checking that p4a.version=latest is absent..."
 
-
-      # ============================================================
-      # 8. Accept Android SDK licenses
-      #
-      # 重点：
-      # Buildozer 使用的是：
-      #
-      # /home/runner/.buildozer/android/platform/android-sdk
-      #
-      # 因此这里直接针对这个 SDK 操作。
-      # ============================================================
-      - name: Accept Android SDK licenses
-        run: |
-          echo "============================================================"
-          echo "ACCEPTING ANDROID SDK LICENSES"
-          echo "============================================================"
-
-          SDK="$HOME/.buildozer/android/platform/android-sdk"
-
-          echo "SDK:"
-          echo "$SDK"
-
-          if [ ! -d "$SDK" ]; then
-            echo "ERROR: Buildozer Android SDK was not created."
+          if grep -q "^p4a.version[[:space:]]*=" buildozer.spec; then
+            echo "ERROR: p4a.version is still present."
             exit 1
           fi
 
-          SDKMANAGER=""
-
-          if [ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
-            SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
-          elif [ -x "$SDK/tools/bin/sdkmanager" ]; then
-            SDKMANAGER="$SDK/tools/bin/sdkmanager"
-          elif [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
-            SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          fi
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found."
-            find "$SDK" -name sdkmanager -type f -print 2>/dev/null || true
-            exit 1
-          fi
-
-          echo "Using sdkmanager:"
-          echo "$SDKMANAGER"
-
-          echo ""
-          echo "Accepting licenses..."
-
-          yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses || true
-
-          echo ""
-          echo "Installing required SDK packages..."
-
-          yes | "$SDKMANAGER" --sdk_root="$SDK" \
-            "platform-tools" \
-            "platforms;android-33" \
-            "build-tools;33.0.2" \
-            "build-tools;37.0.0"
-
-          echo ""
-          echo "Accepting licenses again..."
-
-          yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses || true
-
-          echo ""
-          echo "Installed build-tools:"
-
-          find "$SDK/build-tools" \
-            -maxdepth 1 \
-            -mindepth 1 \
-            -type d \
-            -print 2>/dev/null || true
+          echo "OK."
 
 
       # ============================================================
-      # 9. Verify AIDL
-      # ============================================================
-      - name: Verify AIDL
-        run: |
-          echo "============================================================"
-          echo "CHECKING AIDL"
-          echo "============================================================"
-
-          SDK="$HOME/.buildozer/android/platform/android-sdk"
-
-          echo ""
-          echo "Searching for aidl..."
-
-          find "$SDK/build-tools" \
-            -name aidl \
-            -type f \
-            -print 2>/dev/null || true
-
-          AIDL="$(find "$SDK/build-tools" -name aidl -type f 2>/dev/null | head -1)"
-
-          if [ -z "$AIDL" ]; then
-            echo ""
-            echo "ERROR: aidl was not installed."
-            exit 1
-          fi
-
-          echo ""
-          echo "AIDL found:"
-          echo "$AIDL"
-
-          "$AIDL" --version || true
-
-
-      # ============================================================
-      # 10. Check python-for-android
-      # ============================================================
-      - name: Check python-for-android
-        run: |
-          echo "============================================================"
-          echo "CHECKING PYTHON-FOR-ANDROID"
-          echo "============================================================"
-
-          P4A_DIR=".buildozer/android/platform/python-for-android"
-
-          if [ ! -d "$P4A_DIR" ]; then
-            echo "ERROR: python-for-android directory not found."
-            exit 1
-          fi
-
-          echo "p4a directory:"
-          echo "$P4A_DIR"
-
-          echo ""
-          echo "p4a recipes directory:"
-
-          ls "$P4A_DIR/pythonforandroid/recipes" | head -50
-
-
-      # ============================================================
-      # 11. Patch libthorvg
+      # 8. Build APK
       #
-      # 原 recipe：
-      #
-      # lib/clang/*/lib/linux
-      #
-      # NDK 25b：
-      #
-      # lib64/clang/14.0.6/lib/linux
-      #
-      # 改成 lib*/clang，使 lib / lib64 都可以匹配。
-      # ============================================================
-      - name: Patch libthorvg recipe
-        run: |
-          echo "============================================================"
-          echo "PATCHING LIBTHORVG RECIPE"
-          echo "============================================================"
-
-          RECIPE=".buildozer/android/platform/python-for-android/pythonforandroid/recipes/libthorvg/__init__.py"
-
-          if [ ! -f "$RECIPE" ]; then
-            echo "ERROR: libthorvg recipe not found."
-            exit 1
-          fi
-
-          echo "Recipe:"
-          echo "$RECIPE"
-
-          echo ""
-          echo "Original relevant code:"
-
-          grep -n -A8 -B5 "clang_lib_dir" "$RECIPE" || true
-
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path(
-              ".buildozer/android/platform/python-for-android/"
-              "pythonforandroid/recipes/libthorvg/__init__.py"
-          )
-
-          text = path.read_text()
-
-          old = (
-              'pattern = join('
-              'self.ctx.ndk.llvm_prebuilt_dir, '
-              '"lib/clang/*/lib/linux", '
-              'lib_arch)'
-          )
-
-          new = (
-              'pattern = join('
-              'self.ctx.ndk.llvm_prebuilt_dir, '
-              '"lib*/clang/*/lib/linux", '
-              'lib_arch)'
-          )
-
-          if old not in text:
-              print("Expected recipe line was not found.")
-
-              print("")
-              print("Lines containing llvm_prebuilt_dir:")
-
-              for number, line in enumerate(text.splitlines(), 1):
-                  if "llvm_prebuilt_dir" in line:
-                      print(f"{number}: {line}")
-
-              raise SystemExit(
-                  "ERROR: libthorvg recipe format is different."
-              )
-
-          text = text.replace(old, new, 1)
-
-          path.write_text(text)
-
-          print("")
-          print("libthorvg recipe patched successfully.")
-          PY
-
-          echo ""
-          echo "Patched relevant code:"
-
-          grep -n -A8 -B5 "clang_lib_dir" "$RECIPE"
-
-
-      # ============================================================
-      # 12. Verify libomp.so
-      # ============================================================
-      - name: Verify Clang libraries
-        run: |
-          echo "============================================================"
-          echo "CHECKING CLANG LIBRARIES"
-          echo "============================================================"
-
-          P4A_DIR=".buildozer/android/platform/python-for-android"
-
-          echo ""
-          echo "Searching for libomp.so..."
-
-          find "$P4A_DIR" \
-            -path "*/clang/*/lib/linux/*/libomp.so" \
-            -type f \
-            -print 2>/dev/null | head -30 || true
-
-          echo ""
-          echo "Searching Android SDK / NDK..."
-
-          find "$HOME/.buildozer/android/platform" \
-            -path "*/clang/*/lib/linux/*/libomp.so" \
-            -type f \
-            -print 2>/dev/null | head -30 || true
-
-
-      # ============================================================
-      # 13. Build APK
+      # SDK / NDK / p4a / licenses are handled by Buildozer.
+      # 不再手动碰 .buildozer。
       # ============================================================
       - name: Build APK
         run: |
           echo "============================================================"
-          echo "BUILDING APK"
+          echo "BUILDING XUANJIE APK"
           echo "============================================================"
 
           echo ""
@@ -407,39 +152,37 @@ jobs:
           buildozer --version
 
           echo ""
-          echo "Starting build..."
+          echo "Starting Android build..."
           echo ""
 
           yes | buildozer -v android debug
 
-        timeout-minutes: 60
+        timeout-minutes: 70
+
+        env:
+          PYTHONFORANDROID_PREREQUISITES_INSTALL_INTERACTIVE: "0"
 
 
       # ============================================================
-      # 14. Show APK
+      # 9. Show APK
       # ============================================================
-      - name: Show generated APK
+      - name: Show APK
         if: success()
         run: |
           echo "============================================================"
-          echo "GENERATED APK"
+          echo "APK OUTPUT"
           echo "============================================================"
-
-          if [ ! -d "bin" ]; then
-            echo "ERROR: bin directory not found."
-            exit 1
-          fi
 
           find bin \
             -maxdepth 1 \
             -type f \
-            \( -name "*.apk" -o -name "*.aab" \) \
+            -name "*.apk" \
             -print \
             -exec ls -lh {} \;
 
 
       # ============================================================
-      # 15. Upload APK
+      # 10. Upload APK
       # ============================================================
       - name: Upload APK
         if: success()
