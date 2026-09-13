@@ -89,26 +89,8 @@ jobs:
             buildozer==1.5.0 \
             cython==0.29.36
 
-
-      # ============================================================
-      # 6. Clean old Buildozer state
-      #
-      # 防止之前失败的 p4a / recipe / NDK 缓存干扰本次构建
-      # ============================================================
-      - name: Clean Buildozer state
+            - name: Prepare Android SDK and python-for-android
         run: |
-          echo "============================================================"
-          echo "CLEANING BUILDOZER STATE"
-          echo "============================================================"
-
-          rm -rf "$HOME/.buildozer"
-          rm -rf ".buildozer"
-
-          mkdir -p "$HOME/.buildozer"
-
-          echo "Clean complete."
-          - name: Prepare Android SDK and python-for-android
-          run: |
           echo "============================================================"
           echo "PREPARING ANDROID SDK"
           echo "============================================================"
@@ -168,6 +150,14 @@ jobs:
 
           echo "Found recipe:"
           echo "$RECIPE"
+
+
+      # ============================================================
+      # 6. Clean old Buildozer state
+      #
+      # 防止之前失败的 p4a / recipe / NDK 缓存干扰本次构建
+      # ============================================================
+
           
       # ============================================================
       # 7. Download / initialize python-for-android
