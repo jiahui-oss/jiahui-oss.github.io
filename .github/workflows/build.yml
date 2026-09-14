@@ -1,4 +1,4 @@
-name: Build APK with python-for-android
+name: Build APK
 
 on:
   push:
@@ -12,7 +12,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
 
@@ -25,7 +25,7 @@ jobs:
           ref: xuanjie-app
 
       # ============================================================
-      # Python
+      # Host Python
       # ============================================================
       - name: Setup Python
         uses: actions/setup-python@v7
@@ -33,7 +33,7 @@ jobs:
           python-version: "3.10"
 
       # ============================================================
-      # Java 17
+      # Java
       # ============================================================
       - name: Setup Java
         uses: actions/setup-java@v6
@@ -65,20 +65,48 @@ jobs:
             libltdl-dev \
             cmake \
             gettext \
-            autopoint
+            autopoint \
+            patchelf
 
           sudo apt-get clean
 
       # ============================================================
-      # Install python-for-android directly
+      # Host build tools
       #
-      # Use the official develop branch.
-      # No Buildozer involved.
+      # Cython is a BUILD dependency.
+      # It is deliberately NOT added to the Android app requirements.
+      # ============================================================
+      - name: Install host build tools
+        run: |
+          python -m pip install --upgrade \
+            pip \
+            setuptools \
+            wheel \
+            build
+
+          python -m pip install \
+            "Cython==0.29.36" \
+            "packaging"
+
+          echo "========================================"
+          echo "HOST PYTHON"
+          echo "========================================"
+
+          python --version
+          python -m pip --version
+
+          echo "========================================"
+          echo "CYTHON"
+          echo "========================================"
+
+          python -c "import Cython; print(Cython.__version__)"
+
+      # ============================================================
+      # Install python-for-android
       # ============================================================
       - name: Install python-for-android
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          python -m pip install "Cython==0.29.36"
+          rm -rf "$HOME/python-for-android"
 
           git clone \
             --depth 1 \
@@ -91,27 +119,47 @@ jobs:
           python -m pip install .
 
           echo "========================================"
-          echo "python-for-android:"
+          echo "P4A"
           echo "========================================"
 
           p4a --version
 
       # ============================================================
-      # Prepare Android SDK / NDK / prerequisites
-      #
-      # This uses p4a's own prerequisite installer.
+      # Prepare Android SDK / NDK
       # ============================================================
       - name: Prepare Android toolchain
         run: |
           cd "$HOME/python-for-android"
 
-          python pythonforandroid/prerequisites.py
+          python pythonforandroid/prerequisites.py || true
 
+      # ============================================================
+      # Explicitly install Android API 33
+      #
+      # p4a prerequisites may install newer APIs only.
+      # Our target is deliberately API 33.
+      # ============================================================
       - name: Install Android API 33
         run: |
-          SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
 
-          yes | "$SDKMANAGER" --licenses || true
+          if [ -z "$SDK_ROOT" ]; then
+            echo "ERROR: Android SDK path was not found."
+            exit 1
+          fi
+
+          echo "ANDROID SDK:"
+          echo "$SDK_ROOT"
+
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found:"
+            echo "$SDKMANAGER"
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
 
           "$SDKMANAGER" \
             "platform-tools" \
@@ -119,41 +167,275 @@ jobs:
             "build-tools;33.0.2"
 
           echo "========================================"
-          echo "Installed Android SDK packages"
+          echo "ANDROID API 33"
           echo "========================================"
 
-          "$SDKMANAGER" --list_installed
+          test -d "$SDK_ROOT/platforms/android-33"
+
+          echo "Android API 33 installed."
 
       # ============================================================
-      # Show Android environment
+      # Create local p4a recipes
+      #
+      # 1. Kivy:
+      #    Use CythonRecipe instead of the current PyProjectRecipe.
+      #
+      # 2. libthorvg:
+      #    Fix clang's lib/clang vs lib64/clang layout.
       # ============================================================
-      - name: Check Android environment
+      - name: Prepare local p4a recipes
+        run: |
+          P4A="$HOME/python-for-android"
+          LOCAL="$GITHUB_WORKSPACE/.p4a-recipes"
+
+          rm -rf "$LOCAL"
+          mkdir -p "$LOCAL"
+
+          # ----------------------------------------------------------
+          # Copy official recipes so their patches remain available.
+          # ----------------------------------------------------------
+          cp -a \
+            "$P4A/pythonforandroid/recipes/kivy" \
+            "$LOCAL/kivy"
+
+          cp -a \
+            "$P4A/pythonforandroid/recipes/libthorvg" \
+            "$LOCAL/libthorvg"
+
+          # ----------------------------------------------------------
+          # Replace Kivy recipe with a CythonRecipe-based version.
+          #
+          # This avoids the isolated PEP 517 wheel build which is
+          # where the "No module named Cython" failure occurred.
+          # ----------------------------------------------------------
+          cat > "$LOCAL/kivy/__init__.py" <<'PY'
+          from os.path import join
+          import sys
+
+          import packaging.version
+          import sh
+
+          from pythonforandroid.recipe import CythonRecipe, Recipe
+          from pythonforandroid.toolchain import current_directory, shprint
+
+
+          def get_kivy_version(recipe, arch):
+              with current_directory(
+                  join(recipe.get_build_dir(arch.arch), "kivy")
+              ):
+                  return shprint(
+                      sh.Command(sys.executable),
+                      "-c",
+                      "import _version; print(_version.__version__)",
+                  )
+
+
+          def is_kivy_affected_by_deadlock_issue(recipe=None, arch=None):
+              return packaging.version.parse(
+                  str(get_kivy_version(recipe, arch))
+              ) < packaging.version.Version("2.2.0.dev0")
+
+
+          class KivyRecipe(CythonRecipe):
+              version = "2.3.1"
+              url = "https://github.com/kivy/kivy/archive/{version}.zip"
+              name = "kivy"
+
+              depends = [
+                  ("sdl2", "sdl3"),
+                  "pyjnius",
+                  "setuptools",
+                  "android",
+                  "libthorvg",
+              ]
+
+              python_depends = [
+                  "certifi",
+                  "chardet",
+                  "idna",
+                  "requests",
+                  "urllib3",
+                  "filetype",
+              ]
+
+              # Build-time dependencies for Kivy.
+              hostpython_prerequisites = [
+                  "Cython==0.29.36",
+                  "packaging",
+              ]
+
+              patches = [
+                  (
+                      "sdl-gl-swapwindow-nogil.patch",
+                      is_kivy_affected_by_deadlock_issue,
+                  ),
+                  "use_cython.patch",
+                  "no-ast-str.patch",
+              ]
+
+              def get_recipe_env(self, arch, **kwargs):
+                  env = super().get_recipe_env(arch, **kwargs)
+
+                  env["LDFLAGS"] = env["LDFLAGS"] + " -L{} ".format(
+                      self.ctx.get_libs_dir(arch.arch)
+                      + " -L{} ".format(self.ctx.libs_dir)
+                      + " -L{}".format(
+                          join(
+                              self.ctx.bootstrap.build_dir,
+                              "obj",
+                              "local",
+                              arch.arch,
+                          )
+                      )
+                  )
+
+                  env["LDSHARED"] = env["CC"] + " -shared"
+                  env["LIBLINK"] = "NOTNONE"
+                  env["NDKPLATFORM"] = "NOTNONE"
+
+                  env["USE_SDL2"] = "1"
+                  env["KIVY_SPLIT_EXAMPLES"] = "1"
+
+                  sdl2_mixer_recipe = self.get_recipe(
+                      "sdl2_mixer",
+                      self.ctx,
+                  )
+
+                  sdl2_image_recipe = self.get_recipe(
+                      "sdl2_image",
+                      self.ctx,
+                  )
+
+                  env["KIVY_SDL2_PATH"] = ":".join([
+                      join(
+                          self.ctx.bootstrap.build_dir,
+                          "jni",
+                          "SDL",
+                          "include",
+                      ),
+                      *sdl2_image_recipe.get_include_dirs(arch),
+                      *sdl2_mixer_recipe.get_include_dirs(arch),
+                      join(
+                          self.ctx.bootstrap.build_dir,
+                          "jni",
+                          "SDL2_ttf",
+                      ),
+                  ])
+
+                  # ThorVG
+                  env["KIVY_THORVG_LIB_DIR"] = (
+                      self.ctx.get_libs_dir(arch.arch)
+                  )
+
+                  env["KIVY_THORVG_INCLUDE_DIR"] = join(
+                      Recipe.get_recipe(
+                          "libthorvg",
+                          self.ctx,
+                      ).get_include_dir(arch),
+                      "thorvg-1",
+                  )
+
+                  return env
+
+
+          recipe = KivyRecipe()
+          PY
+
+          # ----------------------------------------------------------
+          # Patch libthorvg's clang path.
+          #
+          # NDK layouts can use either:
+          #   lib/clang/...
+          # or:
+          #   lib64/clang/...
+          #
+          # The old recipe assumed only lib/.
+          # ----------------------------------------------------------
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path(".p4a-recipes/libthorvg/__init__.py")
+          text = path.read_text()
+
+          old = '''            pattern = join(self.ctx.ndk.llvm_prebuilt_dir, "lib/clang/*/lib/linux", lib_arch)
+              clang_lib_dir = glob(pattern)[0]
+              libomp = join(clang_lib_dir, "libomp.so")
+          '''
+
+          new = '''            patterns = [
+                  join(
+                      self.ctx.ndk.llvm_prebuilt_dir,
+                      "lib/clang/*/lib/linux",
+                      lib_arch,
+                  ),
+                  join(
+                      self.ctx.ndk.llvm_prebuilt_dir,
+                      "lib64/clang/*/lib/linux",
+                      lib_arch,
+                  ),
+              ]
+
+              clang_lib_dir = None
+
+              for pattern in patterns:
+                  matches = glob(pattern)
+                  if matches:
+                      clang_lib_dir = matches[0]
+                      break
+
+              if clang_lib_dir is None:
+                  raise RuntimeError(
+                      "Could not find libomp.so in the NDK clang directories"
+                  )
+
+              libomp = join(clang_lib_dir, "libomp.so")
+          '''
+
+          if old not in text:
+              raise SystemExit(
+                  "ERROR: Expected libthorvg clang code was not found."
+              )
+
+          path.write_text(text.replace(old, new))
+          PY
+
+          echo "========================================"
+          echo "LOCAL RECIPES"
+          echo "========================================"
+
+          find "$LOCAL" \
+            -maxdepth 2 \
+            -type f \
+            -print
+
+      # ============================================================
+      # Show exact build configuration
+      # ============================================================
+      - name: Check build configuration
         run: |
           echo "========================================"
-          echo "ANDROID ENVIRONMENT"
+          echo "BUILD CONFIGURATION"
           echo "========================================"
 
-          echo "JAVA_HOME:"
-          echo "$JAVA_HOME"
+          echo "Host Python:"
+          python --version
 
           echo ""
-          echo "ANDROID_HOME:"
-          echo "${ANDROID_HOME:-not set}"
+          echo "Cython:"
+          python -c "import Cython; print(Cython.__version__)"
 
           echo ""
-          echo "ANDROID_SDK_ROOT:"
-          echo "${ANDROID_SDK_ROOT:-not set}"
+          echo "P4A:"
+          p4a --version
 
           echo ""
-          echo "ANDROID_NDK_HOME:"
-          echo "${ANDROID_NDK_HOME:-not set}"
+          echo "Android SDK:"
+          echo "${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
 
           echo ""
-          echo "SDK directories:"
-          find "$HOME/.android" \
-            -maxdepth 3 \
-            -type d \
-            2>/dev/null | head -100 || true
+          echo "Android API 33:"
+          test -d "${ANDROID_SDK_ROOT:-${ANDROID_HOME}}/platforms/android-33"
+          echo "OK"
 
       # ============================================================
       # Build APK directly with python-for-android
@@ -162,8 +444,10 @@ jobs:
         run: |
           echo "========================================"
           echo "BUILDING XUANJIE APK"
-          echo "python-for-android DIRECT BUILD"
+          echo "DIRECT PYTHON-FOR-ANDROID BUILD"
           echo "========================================"
+
+          rm -rf "$HOME/.local/share/python-for-android"
 
           mkdir -p dist
 
@@ -173,12 +457,13 @@ jobs:
             --name="玄界" \
             --version=0.1 \
             --bootstrap=sdl2 \
-            --requirements="python3,kivy==2.3.1,charset-normalizer==3.3.2" \
+            --requirements="python3==3.10.11,hostpython3==3.10.11,kivy==2.3.1,charset-normalizer==3.3.2" \
             --android-api=33 \
             --ndk-api=24 \
             --arch=arm64-v8a \
             --arch=armeabi-v7a \
             --orientation=portrait \
+            --local-recipes="$GITHUB_WORKSPACE/.p4a-recipes" \
             --debug
 
       # ============================================================
@@ -191,17 +476,15 @@ jobs:
           echo "APK OUTPUT"
           echo "========================================"
 
-          echo ""
-          echo "Searching for APK files..."
-
           find . \
             -type f \
             -name "*.apk" \
+            -not -path "./dist/*" \
             -print \
             -exec ls -lh {} \;
 
       # ============================================================
-      # Copy APK to dist/
+      # Collect APK
       # ============================================================
       - name: Collect APK
         if: success()
