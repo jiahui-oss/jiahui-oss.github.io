@@ -1,4 +1,4 @@
-name: Build APK
+name: Build APK with python-for-android
 
 on:
   push:
@@ -11,13 +11,13 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 90
 
     steps:
 
       # ============================================================
-      # 官方 Buildozer CI：Checkout
+      # Checkout
       # ============================================================
       - name: Checkout
         uses: actions/checkout@v7
@@ -25,123 +25,190 @@ jobs:
           ref: xuanjie-app
 
       # ============================================================
-      # 官方 Buildozer CI：Python
+      # Python
       # ============================================================
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.x"
+          python-version: "3.10"
 
       # ============================================================
-      # 官方 Buildozer CI：Java 17
+      # Java 17
       # ============================================================
       - name: Setup Java
         uses: actions/setup-java@v6
         with:
+          distribution: temurin
           java-version: "17"
-          distribution: "temurin"
 
       # ============================================================
       # Linux dependencies
-      # 官方 CI 明确安装的依赖
       # ============================================================
       - name: Install Linux dependencies
         run: |
-          sudo apt update
-          sudo apt -y install \
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            zip \
+            unzip \
+            autoconf \
             automake \
-            libltdl-dev
+            libtool \
+            pkg-config \
+            zlib1g-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libffi-dev \
+            libssl-dev \
+            libltdl-dev \
+            cmake \
+            gettext \
+            autopoint
+
+          sudo apt-get clean
 
       # ============================================================
-      # 安装 Buildozer
+      # Install python-for-android directly
+      #
+      # Use the official develop branch.
+      # No Buildozer involved.
       # ============================================================
-      - name: Install Buildozer
+      - name: Install python-for-android
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install buildozer
+          python -m pip install --upgrade pip setuptools wheel
+
+          git clone \
+            --depth 1 \
+            --branch develop \
+            https://github.com/kivy/python-for-android.git \
+            "$HOME/python-for-android"
+
+          cd "$HOME/python-for-android"
+
+          python -m pip install .
 
           echo "========================================"
-          echo "Python:"
-          python --version
-
+          echo "python-for-android:"
           echo "========================================"
-          echo "pip:"
-          python -m pip --version
 
-          echo "========================================"
-          echo "Buildozer:"
-          buildozer --version
+          p4a --version
 
       # ============================================================
-      # 使用官方方式准备 SDK / NDK / p4a
+      # Prepare Android SDK / NDK / prerequisites
+      #
+      # This uses p4a's own prerequisite installer.
       # ============================================================
-      - name: Setup Android build environment
+      - name: Prepare Android toolchain
         run: |
-          sed -i.bak \
-            "s/# android.accept_sdk_license = False/android.accept_sdk_license = True/" \
-            buildozer.spec
+          cd "$HOME/python-for-android"
 
-          sed -i.bak \
-            "s/#p4a.branch = master/p4a.branch = develop/" \
-            buildozer.spec
-
-          echo "========================================"
-          echo "Buildozer configuration:"
-          echo "========================================"
-
-          grep -E \
-            "^(title|package.name|package.domain|requirements|android.api|android.minapi|android.sdk|android.ndk|android.archs|android.accept_sdk_license|p4a.branch)" \
-            buildozer.spec || true
-
-          echo "========================================"
-          echo "Preparing python-for-android..."
-          echo "========================================"
-
-          buildozer android p4a -- --help
+          python pythonforandroid/prerequisites.py
 
       # ============================================================
-      # 清理旧构建状态
+      # Show Android environment
       # ============================================================
-      - name: Clean build state
+      - name: Check Android environment
         run: |
-          rm -rf .buildozer
-          rm -rf "$HOME/.buildozer"
+          echo "========================================"
+          echo "ANDROID ENVIRONMENT"
+          echo "========================================"
+
+          echo "JAVA_HOME:"
+          echo "$JAVA_HOME"
+
+          echo ""
+          echo "ANDROID_HOME:"
+          echo "${ANDROID_HOME:-not set}"
+
+          echo ""
+          echo "ANDROID_SDK_ROOT:"
+          echo "${ANDROID_SDK_ROOT:-not set}"
+
+          echo ""
+          echo "ANDROID_NDK_HOME:"
+          echo "${ANDROID_NDK_HOME:-not set}"
+
+          echo ""
+          echo "SDK directories:"
+          find "$HOME/.android" \
+            -maxdepth 3 \
+            -type d \
+            2>/dev/null | head -100 || true
 
       # ============================================================
-      # 正式构建 APK
+      # Build APK directly with python-for-android
       # ============================================================
       - name: Build APK
         run: |
           echo "========================================"
           echo "BUILDING XUANJIE APK"
+          echo "python-for-android DIRECT BUILD"
           echo "========================================"
 
-          buildozer android debug
+          mkdir -p dist
+
+          p4a apk \
+            --private . \
+            --package=org.xuanjie.xuanjie \
+            --name="玄界" \
+            --version=0.1 \
+            --bootstrap=sdl2 \
+            --requirements="python3,kivy==2.3.1,charset-normalizer==3.3.2" \
+            --android-api=33 \
+            --ndk-api=24 \
+            --arch=arm64-v8a \
+            --arch=armeabi-v7a \
+            --orientation=portrait \
+            --debug
 
       # ============================================================
-      # 显示 APK
+      # Find APK
       # ============================================================
-      - name: Show APK
+      - name: Find APK
         if: success()
         run: |
           echo "========================================"
           echo "APK OUTPUT"
           echo "========================================"
 
-          find bin \
-            -maxdepth 1 \
+          echo ""
+          echo "Searching for APK files..."
+
+          find . \
             -type f \
             -name "*.apk" \
             -print \
             -exec ls -lh {} \;
 
       # ============================================================
-      # 上传 APK
+      # Copy APK to dist/
+      # ============================================================
+      - name: Collect APK
+        if: success()
+        run: |
+          mkdir -p dist
+
+          find . \
+            -type f \
+            -name "*.apk" \
+            -not -path "./dist/*" \
+            -exec cp {} dist/ \;
+
+          echo "========================================"
+          echo "DIST"
+          echo "========================================"
+
+          ls -lh dist/
+
+      # ============================================================
+      # Upload APK
       # ============================================================
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v5
         with:
           name: xuanjie-apk
-          path: bin/*.apk
+          path: dist/*.apk
           if-no-files-found: error
